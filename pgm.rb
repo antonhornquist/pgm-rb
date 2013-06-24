@@ -118,7 +118,7 @@ module PGM
 
 	class <<self
 		def read_file(fname)
-			unpack_pgm(IO.read(fname, :mode => "rb"))
+			unpack_pgm(File.open(fname, "rb") { |io| io.read })
 		end
 
 		def write_file(fname, pgm)
