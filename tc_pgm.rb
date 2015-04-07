@@ -873,8 +873,6 @@ class TestPGM < Test::Unit::TestCase
 	end
 
 	def test_pack_unpack_default_program
-		PGM.pack_pgm(PGM::Defaults::PROGRAM)
-
 		assert_equal(
 			PGM::Defaults::PROGRAM,
 			PGM.unpack_pgm(PGM.pack_pgm(PGM::Defaults::PROGRAM))

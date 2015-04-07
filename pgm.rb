@@ -106,13 +106,13 @@ module PGM
 			:program_play => Defaults::PROGRAM_PLAY,
 			:pads => Array.new(NUM_PADS) do
 				{
-					:pad => Defaults::PAD,
-					:samples => Array.new(NUM_SAMPLES_PER_PAD) { Defaults::SAMPLE }
+					:pad => Defaults::PAD.dup,
+					:samples => Array.new(NUM_SAMPLES_PER_PAD) { Defaults::SAMPLE.dup }
 				}
 			end,
-			:midi => Defaults::MIDI,
-			:sliders => Array.new(NUM_SLIDERS) { Defaults::SLIDER },
-			:sliders_extra => Array.new(NUM_SLIDERS) { Defaults::SLIDER_EXTRA }
+			:midi => Defaults::MIDI.dup,
+			:sliders => Array.new(NUM_SLIDERS) { Defaults::SLIDER.dup },
+			:sliders_extra => Array.new(NUM_SLIDERS) { Defaults::SLIDER_EXTRA.dup }
 		}
 	end
 
@@ -905,7 +905,7 @@ module PGM
 		end
 
 		def verified_string(param_name, param_string, length)
-			if param_string.size < length
+			if param_string.size <= length
 				param_string
 			elsif param_string == nil
 			 	raise "value for parameter #{param_name} missing"
