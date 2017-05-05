@@ -1,10 +1,6 @@
 # pgm-rb
 
-Akai MPC PGM file format library for Ruby
-
-## Description
-
-Parses and encodes Akai MPC PGM files.
+A little Ruby lib for decoding and encoding Akai MPC PGM files
 
 ## Example
 
