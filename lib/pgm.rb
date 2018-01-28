@@ -131,28 +131,58 @@ module PGM
 			header = unpack_header(str)
 			raise "Not a valid program file" unless valid_pgm_file?(str, header)
 		
+			pads = Array.new(NUM_PADS) do |p|
+				offset = HEADER_SIZE + p * PAD_DATA_SIZE
+				pad_offset = offset + SAMPLE_DATA_SIZE * NUM_SAMPLES_PER_PAD
+				begin
+					pad = unpack_pad(str[pad_offset...pad_offset + PAD_DATA_SIZE])
+				rescue => e
+					raise "error when parsing pad data for pad ##{p}: #{e.message}"
+				end
+				samples = Array.new(NUM_SAMPLES_PER_PAD) do |s|
+					sample_offset = offset + SAMPLE_DATA_SIZE * s
+					begin
+						unpack_sample(str[sample_offset...sample_offset + SAMPLE_DATA_SIZE])
+					rescue => e
+						raise "error when parsing sample data for pad ##{p}, sample #{s}: #{e.message}"
+					end
+				end
+				{
+					:pad => pad,
+					:samples => samples
+				}
+			end
+
+			midi = begin
+				unpack_midi(str[MIDI_SECTION_OFFSET...SLIDERS_SECTION_OFFSET])
+			rescue => e
+				raise "error when parsing midi data: #{e.message}"
+			end
+
+			sliders = Array.new(NUM_SLIDERS) do |r|
+				offset = SLIDERS_SECTION_OFFSET + r * SLIDER_DATA_SIZE
+				begin
+					unpack_slider(str[offset...offset+SLIDER_DATA_SIZE])
+				rescue => e
+					raise "error when parsing slider data for slider #{r}: #{e.message}"
+				end
+			end
+
+			sliders_extra = Array.new(NUM_SLIDERS) do |r|
+				offset = SLIDERS_SECTION_OFFSET + 2 * SLIDER_DATA_SIZE + r * 2
+				begin
+					unpack_slider_extra(str[offset...offset+2])
+				rescue => e
+					raise "error when parsing slider data for slider #{r}: #{e.message}"
+				end
+			end
+
 			{
 				:program_play => header[:program_play],
-				:pads => Array.new(NUM_PADS) do |p|
-					offset = HEADER_SIZE + p * PAD_DATA_SIZE
-					pad_offset = offset + SAMPLE_DATA_SIZE * NUM_SAMPLES_PER_PAD
-					{
-						:pad => unpack_pad(str[pad_offset...pad_offset + PAD_DATA_SIZE]),
-						:samples => Array.new(NUM_SAMPLES_PER_PAD) do |s|
-							sample_offset = offset + SAMPLE_DATA_SIZE * s
-							unpack_sample(str[sample_offset...sample_offset + SAMPLE_DATA_SIZE])
-						end
-					}
-				end,
-				:midi => unpack_midi(str[MIDI_SECTION_OFFSET...SLIDERS_SECTION_OFFSET]),
-				:sliders => Array.new(NUM_SLIDERS) do |r|
-					offset = SLIDERS_SECTION_OFFSET + r * SLIDER_DATA_SIZE
-					unpack_slider(str[offset...offset+SLIDER_DATA_SIZE])
-				end,
-				:sliders_extra => Array.new(NUM_SLIDERS) do |r|
-					offset = SLIDERS_SECTION_OFFSET + 2 * SLIDER_DATA_SIZE + r * 2
-					unpack_slider_extra(str[offset...offset+2])
-				end
+				:pads => pads,
+				:midi => midi,
+				:sliders => sliders,
+				:sliders_extra => sliders_extra
 			}
 		end
 		
@@ -173,8 +203,16 @@ module PGM
 			].join
 		end
 		
+		HEADER_FORMAT_STRING =
+			"S<" + # File size in bytes
+			"x2" + # Padding
+			"A16" + # Filetype String
+			"x" + # Padding
+			"c" + # Program Play
+			"x2" # Padding
+
 		def unpack_header(str)
-			arr = str.unpack("vx2A16xcx2")
+			arr = str.unpack(HEADER_FORMAT_STRING)
 			{
 				:file_size_in_bytes => arr[0],
 				:filetype_string => arr[1],
@@ -187,25 +225,41 @@ module PGM
 				VALID_FILE_SIZE_IN_BYTES,
 				VALID_FILETYPE_STRING,
 				encode_program_play(program_play)
-			].pack("vx2A16xcx2")
+			].pack(HEADER_FORMAT_STRING)
 		end
 		
 		def pack_footer
 			[].pack("x13")
 		end
 		
+		SAMPLE_FORMAT_STRING =
+			"Z16" + # Sample Name
+			"x" + # Padding
+			"C" + # Level
+			"C" + # Range Lower
+			"C" + # Range Upper
+			"s<" + # Tuning
+			"c" + # Play Mode
+			"C" # Velocity to Pitch
+
 		def unpack_sample(str)
-			arr = str.unpack("Z16xC3vcC")
+			arr = str.unpack(SAMPLE_FORMAT_STRING)
+			sample_name = verified_string(:sample_name, arr[0], 16)
+			level = verified_param_value(:level, arr[1], 0, 100)
 			range_lower = arr[2]
 			range_upper = arr[3]
+			raise "value for parameter range_lower (#{range_lower}) is larger than value for parameter range_upper (#{range_upper}" if range_lower > range_upper
+			tuning = verified_param_value(:tuning, arr[4], -3600, 3600)
+			play_mode = decode_play_mode(arr[5])
+			velocity_to_pitch = decode_velocity_to_pitch(arr[6])
 			{
-				:sample_name => verified_string(:sample_name, arr[0], 16),
-				:level => verified_param_value(:level, arr[1], 0, 100),
-				:range_lower => verified_param_value(:range_lower, range_lower, 0, range_upper),
-				:range_upper => verified_param_value(:range_upper, range_upper, range_lower, 127),
-				:tuning => verified_param_value(:tuning, arr[4], -3600, 3600),
-				:play_mode => decode_play_mode(arr[5]),
-				:velocity_to_pitch => decode_velocity_to_pitch(arr[6])
+				:sample_name => sample_name,
+				:level => level,
+				:range_lower => range_lower,
+				:range_upper => range_upper,
+				:tuning => tuning,
+				:play_mode => play_mode,
+				:velocity_to_pitch => velocity_to_pitch
 			}
 		end
 		
@@ -221,7 +275,7 @@ module PGM
 				verified_param_value(:tuning, sample[:tuning], -3600, 3600),
 				encode_play_mode(sample[:play_mode]),
 				encode_velocity_to_pitch(sample[:velocity_to_pitch])
-			].pack("Z16xC3vcC")
+			].pack(SAMPLE_FORMAT_STRING)
 		end
 		
 		def validate_keys(name, input, default)
@@ -230,54 +284,105 @@ module PGM
 			raise "bad #{name} hash. expected keys: #{default_keys.to_a.map{|k|":#{k}"}.join(", ")}. got keys: #{input_keys.to_a.map{|k|":#{k}"}.join(", ")}." unless input_keys.intersection(default_keys).size == input_keys.size
 		end
 
+		PAD_FORMAT_STRING =
+			"x2" + # Padding
+			"c" + # Voice Overlap
+			"c" + # Mute Group
+			"x" + # Padding
+			"c" + # Unknown
+			"C" + # Attack
+			"C" + # Decay
+			"c" + # Decay Mode
+			"C" + # Velocity to Attack
+			"C" + # Velocity to Start
+			"C" + # Velocity to Level
+			"x5" + # Padding
+			"c" + # Filter 1 Type
+			"C" + # Filter 1 Freq
+			"C" + # Filter 1 Res
+			"C" + # Filter 1 Envelope Time
+			"c" + # Filter 1 Envelope Amount
+			"c" + # Filter 1 Velocity to Time
+			"c" + # Filter 1 Velocity to Amount
+			"C" + # Filter 1 Velocity to Frequency
+			"c" + # Filter 2 Type
+			"C" + # Filter 2 Freq
+			"C" + # Filter 2 Res
+			"C" + # Filter 2 Envelope Time
+			"c" + # Filter 2 Envelope Amount
+			"c" + # Filter 2 Velocity to Time
+			"c" + # Filter 2 Velocity to Amount
+			"C" + # Filter 2 Velocity to Frequency
+			"x" + # Padding
+			"S<" + # LFO Rate
+			"S<" + # LFO Delay
+			"C" + # LFO Wave
+			"C" + # LFO Pitch
+			"C" + # LFO Filter 1
+			"C" + # LFO Filter 2
+			"C" + # LFO Level
+			"x4" + # Padding
+			"C" + # Mixer Level
+			"C" + # Mixer Pan
+			"c" + # Output
+			"c" + # Fx Send
+			"C" + # Fx Send Level
+			"c" + # Filter Attenuation
+			"x2" + # Padding
+			"c" + # Mute Target 1
+			"c" + # Mute Target 2
+			"c" + # Mute Target 3
+			"c" + # Mute Target 4
+			"x9" # Padding
+
 		def unpack_pad(str)
-			arr = str.unpack("x2c2x2C2cC2Cx5cC2Cc3CcC2Cc3Cxv2C5x4C2c2Ccx2c4x9")
+			arr = str.unpack(PAD_FORMAT_STRING)
 			{
 				:voice_overlap => decode_voice_overlap(arr[0]),
 				:mute_group => decode_mute_group(arr[1]),
-				:attack => verified_param_value(:attack, arr[2], 0, 100),
-				:decay => verified_param_value(:decay, arr[3], 0, 100),
-				:decay_mode => decode_decay_mode(arr[4]),
-				:velocity_to_attack => verified_param_value(:velocity_to_attack, arr[5], 0, 100),
-				:velocity_to_start => verified_param_value(:velocity_to_start, arr[6], 0, 100),
-				:velocity_to_level => verified_param_value(:velocity_to_level, arr[7], 0, 100),
-				:filter1_type => decode_pad_filter1_type(arr[8]),
-				:filter1_freq => verified_param_value(:filter1_freq, arr[9], 0, 100),
-				:filter1_res => verified_param_value(:filter1_res, arr[10], 0, 100),
-				:filter1_envelope_time => verified_param_value(:filter1_envelope_time, arr[11], 0, 100),
-				:filter1_envelope_amount => verified_param_value(:filter1_envelope_amount, arr[12], -50, 50),
-				:filter1_velocity_to_time => verified_param_value(:filter1_velocity_to_time, arr[13], -50, 50),
-				:filter1_velocity_to_amount => verified_param_value(:filter1_velocity_to_amount, arr[14], -50, 50),
-				:filter1_velocity_to_frequency => verified_param_value(:filter1_velocity_to_frequency, arr[15], 0, 100),
-				:filter2_type => decode_pad_filter2_type(arr[16]),
-				:filter2_freq => verified_param_value(:filter2_freq, arr[17], 0, 100),
-				:filter2_res => verified_param_value(:filter2_res, arr[18], 0, 100),
+				:attack => verified_param_value(:attack, arr[3], 0, 100),
+				:decay => verified_param_value(:decay, arr[4], 0, 100),
+				:decay_mode => decode_decay_mode(arr[5]),
+				:velocity_to_attack => verified_param_value(:velocity_to_attack, arr[6], 0, 100),
+				:velocity_to_start => verified_param_value(:velocity_to_start, arr[7], 0, 100),
+				:velocity_to_level => verified_param_value(:velocity_to_level, arr[8], 0, 100),
+				:filter1_type => decode_pad_filter1_type(arr[9]),
+				:filter1_freq => verified_param_value(:filter1_freq, arr[10], 0, 100),
+				:filter1_res => verified_param_value(:filter1_res, arr[11], 0, 100),
+				:filter1_envelope_time => verified_param_value(:filter1_envelope_time, arr[12], 0, 100),
+				:filter1_envelope_amount => verified_param_value(:filter1_envelope_amount, arr[13], -50, 50),
+				:filter1_velocity_to_time => verified_param_value(:filter1_velocity_to_time, arr[14], -50, 50),
+				:filter1_velocity_to_amount => verified_param_value(:filter1_velocity_to_amount, arr[15], -50, 50),
+				:filter1_velocity_to_frequency => verified_param_value(:filter1_velocity_to_frequency, arr[16], 0, 100),
+				:filter2_type => decode_pad_filter2_type(arr[17]),
+				:filter2_freq => verified_param_value(:filter2_freq, arr[18], 0, 100),
+				:filter2_res => verified_param_value(:filter2_res, arr[19], 0, 100),
 
-				:filter2_envelope_time => verified_param_value(:filter2_envelope_time, arr[19], 0, 100),
-				:filter2_envelope_amount => verified_param_value(:filter2_envelope_amount, arr[20], -50, 50),
-				:filter2_velocity_to_time => verified_param_value(:filter2_velocity_to_time, arr[21], -50, 50),
-				:filter2_velocity_to_amount => verified_param_value(:filter2_velocity_to_amount, arr[22], -50, 50),
+				:filter2_envelope_time => verified_param_value(:filter2_envelope_time, arr[20], 0, 100),
+				:filter2_envelope_amount => verified_param_value(:filter2_envelope_amount, arr[21], -50, 50),
+				:filter2_velocity_to_time => verified_param_value(:filter2_velocity_to_time, arr[22], -50, 50),
+				:filter2_velocity_to_amount => verified_param_value(:filter2_velocity_to_amount, arr[23], -50, 50),
 
-				:filter2_velocity_to_frequency => verified_param_value(:filter2_velocity_to_frequency, arr[23], 0, 100),
+				:filter2_velocity_to_frequency => verified_param_value(:filter2_velocity_to_frequency, arr[24], 0, 100),
 
-				:lfo_rate => arr[24],
-				:lfo_delay => arr[25],
-				:lfo_wave => decode_lfo_wave(arr[26]),
-				:lfo_pitch => verified_param_value(:lfo_pitch, arr[27], 0, 100),
-				:lfo_filter1 => verified_param_value(:lfo_filter1, arr[28], 0, 100),
-				:lfo_filter2 => verified_param_value(:lfo_filter2, arr[29], 0, 100),
-				:lfo_level => verified_param_value(:lfo_level, arr[30], 0, 100),
+				:lfo_rate => arr[25],
+				:lfo_delay => arr[26],
+				:lfo_wave => decode_lfo_wave(arr[27]),
+				:lfo_pitch => verified_param_value(:lfo_pitch, arr[28], 0, 100),
+				:lfo_filter1 => verified_param_value(:lfo_filter1, arr[29], 0, 100),
+				:lfo_filter2 => verified_param_value(:lfo_filter2, arr[30], 0, 100),
+				:lfo_level => verified_param_value(:lfo_level, arr[31], 0, 100),
 
-				:mixer_level => verified_param_value(:mixer_level, arr[31], 0, 100),
-				:mixer_pan => verified_param_value(:mixer_pan, arr[32], 0, 100),
-				:output => decode_pad_output(arr[33]),
-				:fx_send => decode_pad_fx_send(arr[34]),
-				:fx_send_level => verified_param_value(:fx_send_level, arr[35], 0, 100),
-				:filter_attenuation => decode_pad_filter_attenuation(arr[36]),
-				:mute_target1 => decode_mute_target(arr[37]),
-				:mute_target2 => decode_mute_target(arr[38]),
-				:mute_target3 => decode_mute_target(arr[39]),
-				:mute_target4 => decode_mute_target(arr[40]),
+				:mixer_level => verified_param_value(:mixer_level, arr[32], 0, 100),
+				:mixer_pan => verified_param_value(:mixer_pan, arr[33], 0, 100),
+				:output => decode_pad_output(arr[34]),
+				:fx_send => decode_pad_fx_send(arr[35]),
+				:fx_send_level => verified_param_value(:fx_send_level, arr[36], 0, 100),
+				:filter_attenuation => decode_pad_filter_attenuation(arr[37]),
+				:mute_target1 => decode_mute_target(arr[38]),
+				:mute_target2 => decode_mute_target(arr[39]),
+				:mute_target3 => decode_mute_target(arr[40]),
+				:mute_target4 => decode_mute_target(arr[41]),
 			}
 		end
 		
@@ -326,11 +431,13 @@ module PGM
 				encode_mute_target(pad[:mute_target2]),
 				encode_mute_target(pad[:mute_target3]),
 				encode_mute_target(pad[:mute_target4]),
-			].pack("x2c2xcC2cC2Cx5cC2Cc3CcC2Cc3Cxv2C5x4C2c2Ccx2c4x9")
+			].pack(PAD_FORMAT_STRING)
 		end
 		
+		MIDI_FORMAT_STRING = "C#{NUM_PADS}C#{NUM_MIDI_NOTES}C"
+
 		def unpack_midi(str)
-			arr = str.unpack("C#{NUM_PADS}C#{NUM_MIDI_NOTES}C")
+			arr = str.unpack(MIDI_FORMAT_STRING)
 			{
 				:pad_midi_note_values => arr[0...NUM_PADS].map { |c| verified_param_value(:pad_midi_notes_value, c, 0, 127) },
 				:midi_note_pad_values => arr[NUM_PADS...NUM_PADS+NUM_MIDI_NOTES].map { |c| decode_midi_note_pad_value(c) },
@@ -344,11 +451,13 @@ module PGM
 				midi[:pad_midi_note_values].map { |pad_midi_note_value| verified_param_value(:pad_midi_notes_value, pad_midi_note_value, 0, 127) },
 				midi[:midi_note_pad_values].map { |midi_note_pad_value| encode_midi_note_pad_value(midi_note_pad_value) },
 				encode_midi_program_change(midi[:midi_program_change]),
-			].flatten.pack("C#{NUM_PADS}C#{NUM_MIDI_NOTES}C")
+			].flatten.pack(MIDI_FORMAT_STRING)
 		end
 		
+		SLIDER_FORMAT_STRING = "Cc12"
+
 		def unpack_slider(str)
-			arr = str.unpack("Cc12")
+			arr = str.unpack(SLIDER_FORMAT_STRING)
 			slider_change_decoded = decode_slider_change(arr[1])
 
 			tune_low = arr[3]
@@ -409,11 +518,13 @@ module PGM
 				verified_param_value(:attack_high, attack_high, attack_low, 100),
 				verified_param_value(:decay_low, decay_low, 0, decay_high),
 				verified_param_value(:decay_high, decay_high, decay_low, 100),
-			].pack("Cc12")
+			].pack(SLIDER_FORMAT_STRING)
 		end
 		
+		SLIDER_EXTRA_FORMAT_STRING = "c2"
+
 		def unpack_slider_extra(str)
-			arr = str.unpack("c2")
+			arr = str.unpack(SLIDER_EXTRA_FORMAT_STRING)
 			slider_level_low = arr[0]
 			slider_level_high = arr[1]
 			{
@@ -429,7 +540,7 @@ module PGM
 			[
 				verified_param_value(:slider_level_low, slider_level_low, 0, slider_level_high),
 				verified_param_value(:slider_level_high, slider_level_high, slider_level_low, 100),
-			].pack("c2")
+			].pack(SLIDER_EXTRA_FORMAT_STRING)
 		end
 		
 		def decode_program_play(c)
@@ -900,7 +1011,7 @@ module PGM
 			when nil
 			 	raise "value for parameter #{param_name} missing"
 			else
-			 	raise "value #{param_value} for parameter #{param_name} not within range #{low}..#{highest_value}"
+			 	raise "value #{param_value} for parameter #{param_name} not within range #{lowest_value}..#{highest_value}"
 			end
 		end
 
