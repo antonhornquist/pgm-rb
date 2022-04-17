@@ -6,6 +6,7 @@ require 'securerandom'
 require "../lib/pgm"
 
 if drumrack_adg = ARGV[0]
+  # TODO: only gunzip if gzipped, check file
   doc = Zlib::GzipReader.open(drumrack_adg) do |gz|
     Nokogiri::XML(gz.read)
   end
@@ -14,6 +15,7 @@ if drumrack_adg = ARGV[0]
     {
       :name => doc.at_xpath("//Ableton/GroupDevicePreset/BranchPresets/DrumBranchPreset[@Id=#{index}]/DevicePresets/AbletonDevicePreset[@Id=0]/Device/OriginalSimpler[@Id=0]/Player/MultiSampleMap/SampleParts/MultiSamplePart[@Id=0]/Name").attributes["Value"].value,
       :path => doc.at_xpath("//Ableton/GroupDevicePreset/BranchPresets/DrumBranchPreset[@Id=#{index}]/DevicePresets/AbletonDevicePreset[@Id=0]/Device/OriginalSimpler[@Id=0]/Player/MultiSampleMap/SampleParts/MultiSamplePart[@Id=0]/SampleRef/FileRef/Path").attributes["Value"].value,
+      :relative_path => doc.at_xpath("//Ableton/GroupDevicePreset/BranchPresets/DrumBranchPreset[@Id=#{index}]/DevicePresets/AbletonDevicePreset[@Id=0]/Device/OriginalSimpler[@Id=0]/Player/MultiSampleMap/SampleParts/MultiSamplePart[@Id=0]/SampleRef/FileRef/RelativePath").attributes["Value"].value,
       :receiving_note => 128 - doc.at_xpath("//Ableton/GroupDevicePreset/BranchPresets/DrumBranchPreset[@Id=#{index}]/ZoneSettings/ReceivingNote").attributes["Value"].value.to_i,
       :sending_note => doc.at_xpath("//Ableton/GroupDevicePreset/BranchPresets/DrumBranchPreset[@Id=#{index}]/ZoneSettings/SendingNote").attributes["Value"].value.to_i,
       :choke_group => doc.at_xpath("//Ableton/GroupDevicePreset/BranchPresets/DrumBranchPreset[@Id=#{index}]/ZoneSettings/ChokeGroup").attributes["Value"].value,
@@ -22,7 +24,7 @@ if drumrack_adg = ARGV[0]
 
   program_name = "Prog_#{SecureRandom.uuid[0...3]}"
   program_folder = "./#{program_name}"
-  FileUtils.mkdir_p(program_folder)
+  FileUtils.mkdir(program_folder)
 
   MPC500_BANKS = [
     [
